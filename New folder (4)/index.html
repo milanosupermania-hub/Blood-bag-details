@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Roughness & Thickness Tracker</title>
+    <!-- Inlined Manifest for Installation -->
+    <link rel="manifest" href='data:application/manifest+json,{"name":"Roughness Tracker","short_name":"Roughness","start_url":".","display":"standalone","background_color":"#f0f2f5","theme_color":"#007bff","icons":[{"src":"https://cdn-icons-png.flaticon.com","sizes":"192x192","type":"image/png"}]}'>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; margin: 0; background: #f0f2f5; }
+        .input-sidebar { width: 420px; background: #fff; padding: 20px; border-right: 2px solid #ddd; box-shadow: 2px 0 5px rgba(0,0,0,0.05); overflow-y: auto; }
+        .results-main { flex: 1; padding: 25px; overflow-y: auto; }
+        .inline-row { display: flex; gap: 8px; margin-bottom: 12px; }
+        .inline-row > div { flex: 1; }
+        .form-group { margin-bottom: 12px; }
+        label { display: block; font-size: 0.8em; font-weight: 600; color: #444; margin-bottom: 4px; }
+        input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        .btn { padding: 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; width: 100%; margin-top: 10px; }
+        .btn-add { background: #28a745; color: white; border-bottom: 3px solid #1e7e34; }
+        .btn-edit { background: #ffc107; color: #000; padding: 5px; font-size: 11px; width: auto; margin-right: 3px; }
+        .btn-del { background: #dc3545; color: #fff; padding: 5px; font-size: 11px; width: auto; }
+        .action-bar { margin-top: 20px; display: flex; gap: 10px; }
+        .btn-print { background: #007bff; color: white; flex: 1; }
+        .btn-download { background: #6c757d; color: white; flex: 1; }
+        .btn-clear { background: #dc3545; color: white; flex: 1; }
+        #installBtn { background: #6f42c1; color: white; display: none; margin-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; }
+        th, td { padding: 10px; border: 1px solid #eee; text-align: left; font-size: 0.85em; }
+        th { background: #f8f9fa; color: #333; text-transform: uppercase; }
+        @media print { .input-sidebar, .action-bar, .actions-cell { display: none; } .results-main { width: 100%; padding: 0; } }
+    </style>
+</head>
+<body>
+
+<div class="input-sidebar">
+    <button class="btn" id="installBtn">📲 Install App</button>
+    <h2 id="formTitle">New Entry</h2>
+    <div class="inline-row">
+        <div><label>Date</label><input type="date" id="date"></div>
+        <div><label>Shift</label><input type="text" id="shift" placeholder="Shift"></div>
+    </div>
+    <div class="form-group"><label>Roll Number</label><input type="text" id="rollNo"></div>
+    <label>Roughness (4 sides)</label>
+    <div class="inline-row">
+        <div><input type="text" id="s1"></div><div><input type="text" id="s2"></div>
+        <div><input type="text" id="s3"></div><div><input type="text" id="s4"></div>
+    </div>
+    <div class="form-group"><label>Thickness (Numbers Only)</label><input type="text" id="thickness" placeholder="00,00"></div>
+    <button class="btn btn-add" id="mainBtn" onclick="saveData()">Add Record</button>
+</div>
+
+<div class="results-main">
+    <h2 style="margin-top:0">Monthly Results</h2>
+    <table id="dataTable">
+        <thead>
+            <tr><th>Date</th><th>Shift</th><th>Roll #</th><th>R1</th><th>R2</th><th>R3</th><th>R4</th><th>Thickness</th><th class="actions-cell">Action</th></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    <div class="action-bar">
+        <button class="btn btn-print" onclick="window.print()">Print Results</button>
+        <button class="btn btn-download" onclick="downloadCSV()">Download CSV</button>
+        <button class="btn btn-clear" onclick="clearEverything()">Delete Everything</button>
+    </div>
+</div>
+
+<script>
+    // --- 1. SERVICE WORKER REGISTRATION (Requires sw.js file to work offline) ---
+    if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js').catch(() => console.log("Offline mode requires sw.js")); }
+
+    // --- 2. INSTALLATION PROMPT ---
+    let deferredPrompt;
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault(); deferredPrompt = e;
+        document.getElementById('installBtn').style.display = 'block';
+    });
+    document.getElementById('installBtn').addEventListener('click', async () => {
+        if (deferredPrompt) {
+            deferredPrompt.prompt();
+            const { outcome } = await deferredPrompt.userChoice;
+            if (outcome === 'accepted') document.getElementById('installBtn').style.display = 'none';
+            deferredPrompt = null;
+        }
+    });
+
+    // --- 3. DATA PERSISTENCE & LOGIC ---
+    let editIndex = -1;
+    let records = JSON.parse(localStorage.getItem('productionData')) || [];
+    window.onload = renderTable;
+
+    // Comma logic for Thickness (Numbers only)
+    document.getElementById('thickness').addEventListener('input', (e) => {
+        let val = e.target.value.replace(/[^0-9]/g, '');
+        e.target.value = val.length > 2 ? val.match(/.{1,2}/g).join(',') : val;
+    });
+
+    function saveData() {
+        const entry = {
+            date: document.getElementById('date').value, shift: document.getElementById('shift').value,
+            rollNo: document.getElementById('rollNo').value, s1: document.getElementById('s1').value,
+            s2: document.getElementById('s2').value, s3: document.getElementById('s3').value,
+            s4: document.getElementById('s4').value, thickness: document.getElementById('thickness').value
+        };
+        if (editIndex === -1) records.push(entry);
+        else { records[editIndex] = entry; editIndex = -1; }
+        localStorage.setItem('productionData', JSON.stringify(records));
+        resetForm(); renderTable();
+    }
+
+    function renderTable() {
+        const tbody = document.querySelector("#dataTable tbody");
+        tbody.innerHTML = records.map((r, i) => `
+            <tr>
+                <td>${r.date}</td><td>${r.shift}</td><td>${r.rollNo}</td>
+                <td>${r.s1}</td><td>${r.s2}</td><td>${r.s3}</td><td>${r.s4}</td>
+                <td>${r.thickness}</td>
+                <td class="actions-cell">
+                    <button class="btn btn-edit" onclick="editRow(${i})">Edit</button>
+                    <button class="btn btn-del" onclick="deleteRow(${i})">X</button>
+                </td>
+            </tr>`).join('');
+    }
+
+    function editRow(index) {
+        const r = records[index];
+        ['date','shift','rollNo','s1','s2','s3','s4','thickness'].forEach(f => document.getElementById(f).value = r[f]);
+        editIndex = index;
+        document.getElementById('mainBtn').innerText = "Update Record";
+        document.getElementById('formTitle').innerText = "Edit Entry";
+    }
+
+    function deleteRow(index) { if(confirm("Delete this row?")) { records.splice(index, 1); sync(); } }
+    function clearEverything() { if(confirm("Permanently delete ALL data?")) { records = []; sync(); } }
+    function sync() { localStorage.setItem('productionData', JSON.stringify(records)); renderTable(); }
+    function resetForm() {
+        ['rollNo','s1','s2','s3','s4','thickness'].forEach(id => document.getElementById(id).value = '');
+        document.getElementById('mainBtn').innerText = "Add Record";
+        document.getElementById('formTitle').innerText = "New Entry";
+    }
+
+    function downloadCSV() {
+        let csv = "Date,Shift,Roll#,R1,R2,R3,R4,Thickness\n" + records.map(r => `${r.date},${r.shift},${r.rollNo},${r.s1},${r.s2},${r.s3},${r.s4},${r.thickness}`).join("\n");
+        const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'Monthly_Report.csv'; a.click();
+    }
+</script>
+</body>
+</html>
